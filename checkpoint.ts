@@ -40,6 +40,17 @@ export class CheckpointManager<TMetrics> {
     };
   }
 
+  public async revert(checkpoint: Checkpoint<TMetrics>): Promise<void> {
+    if (checkpoint.kind !== CheckpointKind.Git) {
+      return;
+    }
+    const git = simpleGit(checkpoint.repo);
+    await git.raw(["revert", "--no-commit", checkpoint.commitHash]);
+    await git.commit(formatRevertMessage(checkpoint.id), undefined, {
+      "--allow-empty": null,
+    });
+  }
+
   private createDummyCheckpointPayload(): CheckpointPayload {
     return {
       kind: CheckpointKind.Dummy,
@@ -100,6 +111,10 @@ export function formatCommitMessage(summary: CheckpointSummary): string {
     trailers.push(`Checkpoint-Error: ${firstLine(error)}`);
   }
   return `${subject}\n\n${trailers.join("\n")}\n`;
+}
+
+export function formatRevertMessage(id: string): string {
+  return `ar: revert cp=${id.slice(0, 8)}\n\nCheckpoint-Reverts: ${id}\n`;
 }
 
 function firstLine(text: string): string {

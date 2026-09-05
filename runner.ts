@@ -76,6 +76,10 @@ export class ResearchRunner<TMetrics> {
     );
 
     this.addCheckpoint(checkpoint);
+
+    if (status !== "keep") {
+      await this.checkpointManager.revert(checkpoint);
+    }
   }
 }
 
