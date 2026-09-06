@@ -1,24 +1,54 @@
-import type {
-  Checkpoint,
-  CheckpointPayload,
-  CheckpointStatus,
-  CheckpointOptions,
-} from "./types.js";
+import type { CheckpointPayload, CheckpointStatus, CheckpointOptions } from "./types.js";
 import { CheckpointKind } from "./types.js";
 import { simpleGit } from "simple-git";
 
-type CheckpointSummary = {
-  id: string;
+export type CheckpointSummary = {
   status: CheckpointStatus;
   score: number;
   error: string | undefined;
 };
 
-export class CheckpointManager<TMetrics> {
+export class CheckpointManager {
   private checkpointOptions: CheckpointOptions;
 
   constructor(checkpointOptions: CheckpointOptions) {
     this.checkpointOptions = checkpointOptions;
+  }
+
+  public async createPayload(summary: CheckpointSummary): Promise<CheckpointPayload> {
+    if (this.checkpointOptions.kind === CheckpointKind.Git) {
+      return this.createGitCommitCheckpointPayload(this.checkpointOptions.repo, summary);
+    }
+    return { kind: CheckpointKind.Dummy };
+  }
+
+  public async verifyScope(): Promise<void> {
+    if (this.checkpointOptions.kind !== CheckpointKind.Git) {
+      return;
+    }
+    const { repo, scope } = this.checkpointOptions;
+    if (scope === undefined || scope.length === 0) {
+      return;
+    }
+    const git = simpleGit(repo);
+    const status = await git.raw(["status", "--porcelain", "-z", "--untracked-files=all"]);
+    const offending = changedPaths(status).filter((path) => !isWithinScope(path, scope));
+    if (offending.length > 0) {
+      throw new Error(
+        `Changes outside the subject scope: ${[...new Set(offending)].sort().join(", ")}`,
+      );
+    }
+  }
+
+  public async revert(payload: CheckpointPayload): Promise<void> {
+    if (payload.kind !== CheckpointKind.Git) {
+      return;
+    }
+    const git = simpleGit(payload.repo);
+    await git.raw(["revert", "--no-commit", payload.commitHash]);
+    await git.commit(formatRevertMessage(payload.commitHash), undefined, {
+      "--allow-empty": null,
+    });
   }
 
   private async createGitCommitCheckpointPayload(
@@ -39,82 +69,56 @@ export class CheckpointManager<TMetrics> {
       commitHash,
     };
   }
-
-  public async revert(checkpoint: Checkpoint<TMetrics>): Promise<void> {
-    if (checkpoint.kind !== CheckpointKind.Git) {
-      return;
-    }
-    const git = simpleGit(checkpoint.repo);
-    await git.raw(["revert", "--no-commit", checkpoint.commitHash]);
-    await git.commit(formatRevertMessage(checkpoint.id), undefined, {
-      "--allow-empty": null,
-    });
-  }
-
-  private createDummyCheckpointPayload(): CheckpointPayload {
-    return {
-      kind: CheckpointKind.Dummy,
-    };
-  }
-
-  public async createCheckpoint(
-    metrics: TMetrics,
-    score: number,
-    status: CheckpointStatus,
-    error: string | undefined,
-  ): Promise<Checkpoint<TMetrics>> {
-    const id = crypto.randomUUID();
-    const payload =
-      this.checkpointOptions.kind === CheckpointKind.Git
-        ? await this.createGitCommitCheckpointPayload(this.checkpointOptions.repo, {
-            id,
-            status,
-            score,
-            error,
-          })
-        : this.createDummyCheckpointPayload();
-
-    return {
-      ...payload,
-      status,
-      score,
-      metrics,
-      error,
-      id,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-  }
 }
 
 /**
  * Subject line for humans, git trailers for machines:
  *
- *   ar: keep score=12.34 cp=1a2b3c4d
+ *   ar: keep score=12.34
  *
- *   Checkpoint-Id: 1a2b3c4d-....
  *   Checkpoint-Status: keep
  *   Checkpoint-Score: 12.34
  *   Checkpoint-Error: <first line of error>   (crash only)
  *
- * Read back with: git log --format='%(trailers:key=Checkpoint-Id,valueonly)'
+ * The commit hash is the link back to the ledger.
+ * Read back with: git log --format='%(trailers:key=Checkpoint-Score,valueonly)'
  */
 export function formatCommitMessage(summary: CheckpointSummary): string {
-  const { id, status, score, error } = summary;
-  const subject = `ar: ${status} score=${score} cp=${id.slice(0, 8)}`;
-  const trailers = [
-    `Checkpoint-Id: ${id}`,
-    `Checkpoint-Status: ${status}`,
-    `Checkpoint-Score: ${score}`,
-  ];
+  const { status, score, error } = summary;
+  const subject = `ar: ${status} score=${score}`;
+  const trailers = [`Checkpoint-Status: ${status}`, `Checkpoint-Score: ${score}`];
   if (error !== undefined) {
     trailers.push(`Checkpoint-Error: ${firstLine(error)}`);
   }
   return `${subject}\n\n${trailers.join("\n")}\n`;
 }
 
-export function formatRevertMessage(id: string): string {
-  return `ar: revert cp=${id.slice(0, 8)}\n\nCheckpoint-Reverts: ${id}\n`;
+export function formatRevertMessage(commitHash: string): string {
+  return `ar: revert ${commitHash.slice(0, 8)}\n\nThis reverts commit ${commitHash}.\n`;
+}
+
+/** Paths touched in `git status --porcelain -z`, renames counted on both ends. */
+function changedPaths(status: string): string[] {
+  const entries = status.split("\0").filter((entry) => entry !== "");
+  const paths: string[] = [];
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i]!;
+    paths.push(entry.slice(3));
+    if (entry.startsWith("R") || entry.startsWith("C")) {
+      const origin = entries[++i];
+      if (origin !== undefined) {
+        paths.push(origin);
+      }
+    }
+  }
+  return paths;
+}
+
+function isWithinScope(path: string, scope: string[]): boolean {
+  return scope.some((entry) => {
+    const prefix = entry.replace(/\/+$/, "");
+    return path === prefix || path.startsWith(`${prefix}/`);
+  });
 }
 
 function firstLine(text: string): string {

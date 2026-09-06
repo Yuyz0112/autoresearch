@@ -1,4 +1,4 @@
-type BasicMetadata = {
+export type BasicMetadata = {
   id: string;
   createdAt: string;
   updatedAt: string;
@@ -9,6 +9,7 @@ export type ResearchOptions<TMetrics> = {
   checkpointOptions: CheckpointOptions;
   doResearch: ResearchFn<TMetrics>;
   doScore: ScoreFn<TMetrics>;
+  storageProvider: StorageProvider;
 };
 
 export type CheckpointOptions =
@@ -18,6 +19,9 @@ export type CheckpointOptions =
   | {
       kind: CheckpointKind.Git;
       repo: string;
+      // Paths the subject is confined to, relative to the repo root. Changes
+      // outside them fail the checkpoint instead of being silently committed.
+      scope?: string[];
     };
 
 export type Research<TMetrics> = {
@@ -25,12 +29,14 @@ export type Research<TMetrics> = {
   checkpoints: Checkpoint<TMetrics>[];
 } & BasicMetadata;
 
-export type Checkpoint<TMetrics> = BasicMetadata & {
+export type CheckpointData<TMetrics> = {
   status: CheckpointStatus;
   metrics: TMetrics;
   score: number;
   error?: string;
 } & CheckpointPayload;
+
+export type Checkpoint<TMetrics> = BasicMetadata & CheckpointData<TMetrics>;
 
 export type CheckpointPayload = GitCommitCheckpoint | DummyCheckpoint;
 
@@ -55,3 +61,13 @@ export enum CheckpointKind {
 export type ResearchFn<TMetrics> = () => Promise<TMetrics>;
 
 export type ScoreFn<TMetrics> = (metrics: TMetrics) => Promise<number>;
+
+export type AnyResearch = Research<unknown>;
+export type AnyCheckpoint = Checkpoint<unknown>;
+
+export type StorageProvider = {
+  createResearch(name: string): Promise<AnyResearch>;
+  getResearch(id: string): Promise<AnyResearch | undefined>;
+  listResearches(): Promise<string[]>;
+  appendCheckpoint(researchId: string, data: CheckpointData<unknown>): Promise<AnyCheckpoint>;
+};

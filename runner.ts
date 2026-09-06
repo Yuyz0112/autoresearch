@@ -1,51 +1,44 @@
-import type {
-  ResearchOptions,
-  Research,
-  Checkpoint,
-  ResearchFn,
-  CheckpointStatus,
-  ScoreFn,
-} from "./types.js";
+import type { ResearchOptions, Research, Checkpoint, CheckpointStatus } from "./types.js";
 import { CheckpointManager } from "./checkpoint.js";
 
 export class ResearchRunner<TMetrics> {
-  private research: Research<TMetrics>;
-  private checkpointManager: CheckpointManager<TMetrics>;
-  private doResearch: ResearchFn<TMetrics>;
-  private doScore: ScoreFn<TMetrics>;
+  private options: ResearchOptions<TMetrics>;
+  private checkpointManager: CheckpointManager;
+  private _research: Research<TMetrics>;
 
-  constructor(options: ResearchOptions<TMetrics>) {
-    this.research = this.createResearch(options.name);
+  private constructor(options: ResearchOptions<TMetrics>, research: Research<TMetrics>) {
+    this.options = options;
     this.checkpointManager = new CheckpointManager(options.checkpointOptions);
-    this.doResearch = options.doResearch;
-    this.doScore = options.doScore;
+    this._research = research;
   }
 
-  private createResearch(name: string): Research<TMetrics> {
-    return {
-      id: crypto.randomUUID(),
-      name,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      checkpoints: [],
-    };
+  public static async create<TMetrics>(
+    options: ResearchOptions<TMetrics>,
+  ): Promise<ResearchRunner<TMetrics>> {
+    const research = await options.storageProvider.createResearch(options.name);
+    return new ResearchRunner(options, research as Research<TMetrics>);
   }
 
-  private addCheckpoint(checkpoint: Checkpoint<TMetrics>): void {
-    this.research.checkpoints.push(checkpoint);
-    this.research.updatedAt = new Date().toISOString();
+  public static async resume<TMetrics>(
+    options: ResearchOptions<TMetrics>,
+    researchId: string,
+  ): Promise<ResearchRunner<TMetrics>> {
+    const research = await options.storageProvider.getResearch(researchId);
+    if (research === undefined) {
+      throw new Error(`Research not found: ${researchId}`);
+    }
+    return new ResearchRunner(options, research as Research<TMetrics>);
+  }
+
+  public get research(): Research<TMetrics> {
+    return this._research;
   }
 
   private findBestScore(): number {
-    if (this.research.checkpoints.length === 0) {
-      return 0;
-    }
-
-    return this.research.checkpoints.reduce<number>((best, current) => {
+    return this._research.checkpoints.reduce<number>((best, current) => {
       if (current.status !== "keep") {
         return best;
       }
-
       return Math.max(best, current.score);
     }, 0);
   }
@@ -57,8 +50,9 @@ export class ResearchRunner<TMetrics> {
     let errorMsg: string | undefined = undefined;
 
     try {
-      metrics = await this.doResearch();
-      score = await this.doScore(metrics);
+      await this.checkpointManager.verifyScope();
+      metrics = await this.options.doResearch();
+      score = await this.options.doScore(metrics);
       const best = this.findBestScore();
       if (score <= best) {
         status = "discard";
@@ -68,17 +62,24 @@ export class ResearchRunner<TMetrics> {
       status = "crash";
     }
 
-    const checkpoint = await this.checkpointManager.createCheckpoint(
-      metrics,
-      score,
+    const payload = await this.checkpointManager.createPayload({
       status,
-      errorMsg,
-    );
+      score,
+      error: errorMsg,
+    });
 
-    this.addCheckpoint(checkpoint);
+    const checkpoint = await this.options.storageProvider.appendCheckpoint(this._research.id, {
+      ...payload,
+      status,
+      score,
+      metrics,
+      error: errorMsg,
+    });
+    this._research.checkpoints.push(checkpoint as Checkpoint<TMetrics>);
+    this._research.updatedAt = checkpoint.updatedAt;
 
     if (status !== "keep") {
-      await this.checkpointManager.revert(checkpoint);
+      await this.checkpointManager.revert(payload);
     }
   }
 }
