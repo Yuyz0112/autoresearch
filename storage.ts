@@ -28,18 +28,26 @@ export abstract class BaseStorageProvider implements StorageProvider {
     return this.listResearchIds();
   }
 
+  newCheckpointId(): string {
+    return newId();
+  }
+
   async appendCheckpoint(
     researchId: string,
+    id: string,
     data: CheckpointData<unknown>,
   ): Promise<AnyCheckpoint> {
     const research = await this.readResearch(researchId);
     if (research === undefined) {
       throw new Error(`Research not found: ${researchId}`);
     }
+    if (research.checkpoints.some((existing) => existing.id === id)) {
+      throw new Error(`Checkpoint already exists: ${id}`);
+    }
     const now = timestamp();
     const checkpoint: AnyCheckpoint = {
       ...data,
-      id: newId(),
+      id,
       createdAt: now,
       updatedAt: now,
     };

@@ -1,4 +1,4 @@
-import type { ResearchOptions, Research, Checkpoint, CheckpointStatus } from "./types.js";
+import type { ResearchOptions, Research, Checkpoint, CheckpointStatus, Score } from "./types.js";
 import { CheckpointManager } from "./checkpoint.js";
 
 export class ResearchRunner<TMetrics> {
@@ -34,27 +34,30 @@ export class ResearchRunner<TMetrics> {
     return this._research;
   }
 
-  private findBestScore(): number {
+  /**
+   * Best kept score under the same score function. Scores from other
+   * versions are on a different scale, so they are not comparable.
+   */
+  private findBestScore(version: string): number {
     return this._research.checkpoints.reduce<number>((best, current) => {
-      if (current.status !== "keep") {
+      if (current.status !== "keep" || current.score?.version !== version) {
         return best;
       }
-      return Math.max(best, current.score);
+      return Math.max(best, current.score.value);
     }, 0);
   }
 
   public async run(): Promise<void> {
     let metrics: TMetrics = {} as TMetrics;
     let status: CheckpointStatus = "keep";
-    let score = 0;
+    let score: Score | null = null;
     let errorMsg: string | undefined = undefined;
 
     try {
       await this.checkpointManager.verifyScope();
       metrics = await this.options.doResearch();
       score = await this.options.doScore(metrics);
-      const best = this.findBestScore();
-      if (score <= best) {
+      if (score.value <= this.findBestScore(score.version)) {
         status = "discard";
       }
     } catch (error) {
@@ -62,19 +65,25 @@ export class ResearchRunner<TMetrics> {
       status = "crash";
     }
 
+    const checkpointId = this.options.storageProvider.newCheckpointId();
     const payload = await this.checkpointManager.createPayload({
+      id: checkpointId,
       status,
       score,
       error: errorMsg,
     });
 
-    const checkpoint = await this.options.storageProvider.appendCheckpoint(this._research.id, {
-      ...payload,
-      status,
-      score,
-      metrics,
-      error: errorMsg,
-    });
+    const checkpoint = await this.options.storageProvider.appendCheckpoint(
+      this._research.id,
+      checkpointId,
+      {
+        ...payload,
+        status,
+        score,
+        metrics,
+        error: errorMsg,
+      },
+    );
     this._research.checkpoints.push(checkpoint as Checkpoint<TMetrics>);
     this._research.updatedAt = checkpoint.updatedAt;
 

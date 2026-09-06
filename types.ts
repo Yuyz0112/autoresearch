@@ -32,7 +32,8 @@ export type Research<TMetrics> = {
 export type CheckpointData<TMetrics> = {
   status: CheckpointStatus;
   metrics: TMetrics;
-  score: number;
+  // null when the run crashed before a score existed.
+  score: Score | null;
   error?: string;
 } & CheckpointPayload;
 
@@ -60,7 +61,13 @@ export enum CheckpointKind {
 
 export type ResearchFn<TMetrics> = () => Promise<TMetrics>;
 
-export type ScoreFn<TMetrics> = (metrics: TMetrics) => Promise<number>;
+export type Score = {
+  // a semantic version string of the score function
+  version: string;
+  value: number;
+};
+
+export type ScoreFn<TMetrics> = (metrics: TMetrics) => Promise<Score>;
 
 export type AnyResearch = Research<unknown>;
 export type AnyCheckpoint = Checkpoint<unknown>;
@@ -69,5 +76,11 @@ export type StorageProvider = {
   createResearch(name: string): Promise<AnyResearch>;
   getResearch(id: string): Promise<AnyResearch | undefined>;
   listResearches(): Promise<string[]>;
-  appendCheckpoint(researchId: string, data: CheckpointData<unknown>): Promise<AnyCheckpoint>;
+  // Allocated before the checkpoint exists, so a carrier can reference it.
+  newCheckpointId(): string;
+  appendCheckpoint(
+    researchId: string,
+    id: string,
+    data: CheckpointData<unknown>,
+  ): Promise<AnyCheckpoint>;
 };

@@ -1,10 +1,11 @@
-import type { CheckpointPayload, CheckpointStatus, CheckpointOptions } from "./types.js";
+import type { CheckpointPayload, CheckpointStatus, CheckpointOptions, Score } from "./types.js";
 import { CheckpointKind } from "./types.js";
 import { simpleGit } from "simple-git";
 
 export type CheckpointSummary = {
+  id: string;
   status: CheckpointStatus;
-  score: number;
+  score: Score | null;
   error: string | undefined;
 };
 
@@ -72,25 +73,19 @@ export class CheckpointManager {
 }
 
 /**
- * Subject line for humans, git trailers for machines:
+ * A human-readable subject and a pointer to the ledger:
  *
  *   ar: keep score=12.34
  *
- *   Checkpoint-Status: keep
- *   Checkpoint-Score: 12.34
- *   Checkpoint-Error: <first line of error>   (crash only)
+ *   Checkpoint-Id: 1a2b3c4d-....
  *
- * The commit hash is the link back to the ledger.
- * Read back with: git log --format='%(trailers:key=Checkpoint-Score,valueonly)'
+ * The subject is a label; the ledger holds the checkpoint itself.
+ * Read back with: git log --format='%(trailers:key=Checkpoint-Id,valueonly)'
  */
 export function formatCommitMessage(summary: CheckpointSummary): string {
-  const { status, score, error } = summary;
-  const subject = `ar: ${status} score=${score}`;
-  const trailers = [`Checkpoint-Status: ${status}`, `Checkpoint-Score: ${score}`];
-  if (error !== undefined) {
-    trailers.push(`Checkpoint-Error: ${firstLine(error)}`);
-  }
-  return `${subject}\n\n${trailers.join("\n")}\n`;
+  const { id, status, score } = summary;
+  const subject = score === null ? `ar: ${status}` : `ar: ${status} score=${score.value}`;
+  return `${subject}\n\nCheckpoint-Id: ${id}\n`;
 }
 
 export function formatRevertMessage(commitHash: string): string {
@@ -119,8 +114,4 @@ function isWithinScope(path: string, scope: string[]): boolean {
     const prefix = entry.replace(/\/+$/, "");
     return path === prefix || path.startsWith(`${prefix}/`);
   });
-}
-
-function firstLine(text: string): string {
-  return text.split("\n", 1)[0] ?? "";
 }
