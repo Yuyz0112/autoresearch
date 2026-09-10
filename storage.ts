@@ -1,6 +1,6 @@
 import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { AnyCheckpoint, AnyResearch, CheckpointData, StorageProvider } from "./types.js";
+import type { AnyCheckpoint, AnyResearch, CheckpointData, StorageProvider } from "./types.ts";
 
 export abstract class BaseStorageProvider implements StorageProvider {
   protected abstract readResearch(id: string): Promise<AnyResearch | undefined>;
@@ -18,6 +18,16 @@ export abstract class BaseStorageProvider implements StorageProvider {
     };
     await this.writeResearch(research);
     return research;
+  }
+
+  async openResearch(name: string): Promise<AnyResearch> {
+    for (const id of await this.listResearchIds()) {
+      const research = await this.readResearch(id);
+      if (research?.name === name) {
+        return research;
+      }
+    }
+    return this.createResearch(name);
   }
 
   async getResearch(id: string): Promise<AnyResearch | undefined> {

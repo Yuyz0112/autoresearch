@@ -74,6 +74,9 @@ export type AnyCheckpoint = Checkpoint<unknown>;
 
 export type StorageProvider = {
   createResearch(name: string): Promise<AnyResearch>;
+  // The named research, created on first use. Names are the stable handle;
+  // ids stay opaque.
+  openResearch(name: string): Promise<AnyResearch>;
   getResearch(id: string): Promise<AnyResearch | undefined>;
   listResearches(): Promise<string[]>;
   // Allocated before the checkpoint exists, so a carrier can reference it.

@@ -1,5 +1,5 @@
-import type { CheckpointPayload, CheckpointStatus, CheckpointOptions, Score } from "./types.js";
-import { CheckpointKind } from "./types.js";
+import type { CheckpointPayload, CheckpointStatus, CheckpointOptions, Score } from "./types.ts";
+import { CheckpointKind } from "./types.ts";
 import { simpleGit } from "simple-git";
 
 export type CheckpointSummary = {

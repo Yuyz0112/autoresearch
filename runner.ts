@@ -1,5 +1,5 @@
-import type { ResearchOptions, Research, Checkpoint, CheckpointStatus, Score } from "./types.js";
-import { CheckpointManager } from "./checkpoint.js";
+import type { ResearchOptions, Research, Checkpoint, CheckpointStatus, Score } from "./types.ts";
+import { CheckpointManager } from "./checkpoint.ts";
 
 export class ResearchRunner<TMetrics> {
   private options: ResearchOptions<TMetrics>;
@@ -16,6 +16,14 @@ export class ResearchRunner<TMetrics> {
     options: ResearchOptions<TMetrics>,
   ): Promise<ResearchRunner<TMetrics>> {
     const research = await options.storageProvider.createResearch(options.name);
+    return new ResearchRunner(options, research as Research<TMetrics>);
+  }
+
+  /** Continue the research named in the options, starting it on first run. */
+  public static async open<TMetrics>(
+    options: ResearchOptions<TMetrics>,
+  ): Promise<ResearchRunner<TMetrics>> {
+    const research = await options.storageProvider.openResearch(options.name);
     return new ResearchRunner(options, research as Research<TMetrics>);
   }
 
