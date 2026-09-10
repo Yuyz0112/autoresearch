@@ -2,6 +2,15 @@ import type { ResearchOptions, Research, Checkpoint, CheckpointStatus, Score } f
 import { CheckpointKind } from "./types.ts";
 import { CheckpointManager } from "./checkpoint.ts";
 
+/**
+ * Thrown when the harness itself could not run the experiment — the service it
+ * measures against is down, the subject directory is missing, something needs
+ * a person. The runner lets it through untouched: no checkpoint is recorded
+ * and nothing is reverted, because the subject did nothing wrong and its work
+ * should survive.
+ */
+export class HarnessError extends Error {}
+
 export class ResearchRunner<TMetrics> {
   private options: ResearchOptions<TMetrics>;
   private checkpointManager: CheckpointManager;
@@ -72,6 +81,9 @@ export class ResearchRunner<TMetrics> {
         status = "discard";
       }
     } catch (error) {
+      if (error instanceof HarnessError) {
+        throw error;
+      }
       errorMsg = toError(error).message;
       status = "crash";
     }
