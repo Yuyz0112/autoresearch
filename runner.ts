@@ -1,4 +1,5 @@
 import type { ResearchOptions, Research, Checkpoint, CheckpointStatus, Score } from "./types.ts";
+import { CheckpointKind } from "./types.ts";
 import { CheckpointManager } from "./checkpoint.ts";
 
 export class ResearchRunner<TMetrics> {
@@ -24,6 +25,7 @@ export class ResearchRunner<TMetrics> {
     options: ResearchOptions<TMetrics>,
   ): Promise<ResearchRunner<TMetrics>> {
     const research = await options.storageProvider.openResearch(options.name);
+    assertSameRepo(research as Research<TMetrics>, options);
     return new ResearchRunner(options, research as Research<TMetrics>);
   }
 
@@ -35,6 +37,7 @@ export class ResearchRunner<TMetrics> {
     if (research === undefined) {
       throw new Error(`Research not found: ${researchId}`);
     }
+    assertSameRepo(research as Research<TMetrics>, options);
     return new ResearchRunner(options, research as Research<TMetrics>);
   }
 
@@ -98,6 +101,32 @@ export class ResearchRunner<TMetrics> {
     if (status !== "keep") {
       await this.checkpointManager.revert(payload);
     }
+  }
+}
+
+/**
+ * A research's checkpoints are commits on one branch in one worktree. Pointed
+ * at a different one, a revert would restore a tree the scores never described.
+ */
+function assertSameRepo<TMetrics>(
+  research: Research<TMetrics>,
+  options: ResearchOptions<TMetrics>,
+): void {
+  if (options.checkpointOptions.kind !== CheckpointKind.Git) {
+    return;
+  }
+  const { repo } = options.checkpointOptions;
+  for (let i = research.checkpoints.length - 1; i >= 0; i--) {
+    const checkpoint = research.checkpoints[i]!;
+    if (checkpoint.kind !== CheckpointKind.Git) {
+      continue;
+    }
+    if (checkpoint.repo !== repo) {
+      throw new Error(
+        `Research ${research.name} is checkpointed in ${checkpoint.repo}, not ${repo}`,
+      );
+    }
+    return;
   }
 }
 
