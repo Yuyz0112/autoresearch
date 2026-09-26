@@ -35,10 +35,40 @@ export function claudeCode(options: ClaudeCodeOptions = {}): Agent {
       } else {
         args.push("--allowedTools", ...options.allowedTools, "--permission-prompts", "none");
       }
-      const raw = await run(args, request, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-      return parseResult(raw);
+      for (let attempt = 1; ; attempt++) {
+        try {
+          const raw = await run(args, request, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+          return parseResult(raw);
+        } catch (error) {
+          const wait = RETRY_WAITS_MS[attempt - 1];
+          if (
+            wait === undefined ||
+            !(error instanceof HarnessError) ||
+            !isTransient(error.message)
+          ) {
+            throw error;
+          }
+          await new Promise((resolve) => setTimeout(resolve, wait));
+        }
+      }
     },
   };
+}
+
+/**
+ * How long to wait before each retry of a turn the connection dropped.
+ * A dropped connection says nothing about the work, and one used to end a
+ * whole run, throwing away a measurement that took a quarter of an hour.
+ * A retried turn is a fresh session that finds the files as the lost one
+ * left them, which is what a new turn would find anyway.
+ */
+const RETRY_WAITS_MS = [30_000, 120_000];
+
+/** Whether a failure was the API's rather than the agent's: worth trying again. */
+export function isTransient(message: string): boolean {
+  return /"terminal_reason":"api_error"|API Error: (Connection|Overloaded|5\d\d|Request timed out)/i.test(
+    message,
+  );
 }
 
 function run(args: string[], request: AgentRequest, timeoutMs: number): Promise<string> {
