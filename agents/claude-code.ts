@@ -6,6 +6,13 @@ export type ClaudeCodeOptions = {
   model?: string;
   /** A turn that never returns would stall the loop rather than fail it. */
   timeoutMs?: number;
+  /**
+   * Tools the agent may use, e.g. `["Read", "Bash(pnpm run case-gen:write*)"]`.
+   * Anything else is denied outright rather than left waiting for an answer
+   * nobody is there to give. Unset allows everything, which is what the scope
+   * guard and the revert exist to make survivable.
+   */
+  allowedTools?: string[];
 };
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
@@ -23,8 +30,13 @@ export function claudeCode(options: ClaudeCodeOptions = {}): Agent {
       if (options.model !== undefined) {
         args.push("--model", options.model);
       }
+      if (options.allowedTools === undefined) {
+        args.push("--permission-mode", "bypassPermissions");
+      } else {
+        args.push("--allowedTools", ...options.allowedTools, "--permission-prompts", "none");
+      }
       const raw = await run(args, request, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-      return parse(raw);
+      return parseResult(raw);
     },
   };
 }
@@ -58,18 +70,21 @@ function run(args: string[], request: AgentRequest, timeoutMs: number): Promise<
   });
 }
 
-type Result = {
+export type Result = {
   result?: string;
   is_error?: boolean;
-  usage?: {
-    input_tokens?: number;
-    output_tokens?: number;
-    cache_read_input_tokens?: number;
-    cache_creation_input_tokens?: number;
-  };
+  /** Per model, and the only figure that survives a turn delegating to subagents. */
+  modelUsage?: Record<string, ModelUsage>;
 };
 
-function parse(raw: string): AgentReply {
+type ModelUsage = {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadInputTokens?: number;
+  cacheCreationInputTokens?: number;
+};
+
+export function parseResult(raw: string): AgentReply {
   let result: Result;
   try {
     result = JSON.parse(raw) as Result;
@@ -82,19 +97,23 @@ function parse(raw: string): AgentReply {
   return { text: result.result, usage: usageOf(result) };
 }
 
+/**
+ * Summed over models rather than read from `usage`, which reports the last
+ * exchange: a turn that delegates to subagents does most of its work outside
+ * it, and reported a couple of hundred tokens for an hour of writing.
+ */
 function usageOf(result: Result): TokenUsage | undefined {
-  const usage = result.usage;
-  if (usage === undefined) {
+  const models = Object.values(result.modelUsage ?? {});
+  if (models.length === 0) {
     return undefined;
   }
-  return {
-    input: usage.input_tokens ?? 0,
-    output: usage.output_tokens ?? 0,
-    ...(usage.cache_read_input_tokens === undefined
-      ? {}
-      : { cacheRead: usage.cache_read_input_tokens }),
-    ...(usage.cache_creation_input_tokens === undefined
-      ? {}
-      : { cacheWrite: usage.cache_creation_input_tokens }),
-  };
+  return models.reduce<TokenUsage>(
+    (total, model) => ({
+      input: total.input + (model.inputTokens ?? 0),
+      output: total.output + (model.outputTokens ?? 0),
+      cacheRead: (total.cacheRead ?? 0) + (model.cacheReadInputTokens ?? 0),
+      cacheWrite: (total.cacheWrite ?? 0) + (model.cacheCreationInputTokens ?? 0),
+    }),
+    { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  );
 }
