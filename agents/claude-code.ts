@@ -63,7 +63,13 @@ function run(args: string[], request: AgentRequest, timeoutMs: number): Promise<
         resolve(Buffer.concat(out).toString("utf8"));
         return;
       }
-      reject(new HarnessError(`claude exited ${String(code)}: ${Buffer.concat(err).toString()}`));
+      // With --output-format json the reason is usually on stdout, not stderr.
+      const said = [Buffer.concat(err).toString(), Buffer.concat(out).toString()]
+        .map((text) => text.trim())
+        .filter((text) => text !== "")
+        .join("\n")
+        .slice(0, 2000);
+      reject(new HarnessError(`claude exited ${String(code)}: ${said}`));
     });
 
     child.stdin.end(promptOf(request));
