@@ -66,8 +66,25 @@ function run(args: string[], request: AgentRequest, timeoutMs: number): Promise<
       reject(new HarnessError(`claude exited ${String(code)}: ${Buffer.concat(err).toString()}`));
     });
 
-    child.stdin.end(request.prompt);
+    child.stdin.end(promptOf(request));
   });
+}
+
+/**
+ * The prompt as sent. The CLI reads files with its own tools, so attachments
+ * are named for it to open rather than sent along.
+ */
+export function promptOf(request: AgentRequest): string {
+  const attachments = request.attachments ?? [];
+  if (attachments.length === 0) {
+    return request.prompt;
+  }
+  return [
+    request.prompt,
+    "",
+    "Attached — read each of these before answering:",
+    ...attachments.map((path) => `  ${path}`),
+  ].join("\n");
 }
 
 export type Result = {

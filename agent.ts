@@ -17,6 +17,12 @@ export type AgentRequest = {
   prompt: string;
   /** Where paths named in the prompt resolve. Ignored by agents that cannot read files. */
   cwd: string;
+  /**
+   * Files the turn has to look at — a screenshot to judge, say. Paths, so a
+   * request never carries a copy: an agent that reads files is pointed at
+   * them, and one that takes content inline attaches them itself.
+   */
+  attachments?: string[];
 };
 
 export type AgentReply = {
