@@ -64,7 +64,7 @@ export class ResearchRunner<TMetrics> {
         return best;
       }
       return Math.max(best, current.score.value);
-    }, 0);
+    }, Number.NEGATIVE_INFINITY);
   }
 
   public async run(): Promise<void> {
