@@ -11,13 +11,16 @@ export type CodexOptions = {
   /** Extra working directories, e.g. the renderer agent's scratch space. */
   writableDirs?: string[];
   networkAccess?: boolean;
+  /** JSON Schema for the final answer, enforced by Codex rather than the prompt alone. */
+  outputSchema?: string;
+  reasoningEffort?: "low" | "medium" | "high";
 };
 
 /** Fresh, non-interactive turns; authentication stays with the local CLI. */
 export function codex(options: CodexOptions = {}): Agent {
   const model = options.model ?? process.env["CODEX_MODEL"] ?? "gpt-6-astra";
   return {
-    name: `codex:${model}`,
+    name: `codex:${model}${options.reasoningEffort === undefined ? "" : `:${options.reasoningEffort}`}`,
     async ask(request) {
       const args = [
         "exec",
@@ -38,6 +41,12 @@ export function codex(options: CodexOptions = {}): Agent {
       }
       for (const dir of options.writableDirs ?? []) {
         args.push("--add-dir", dir);
+      }
+      if (options.outputSchema !== undefined) {
+        args.push("--output-schema", options.outputSchema);
+      }
+      if (options.reasoningEffort !== undefined) {
+        args.push("-c", `model_reasoning_effort=${JSON.stringify(options.reasoningEffort)}`);
       }
       for (const file of request.attachments ?? []) {
         if (isImage(file)) args.push("--image", resolve(request.cwd, file));
