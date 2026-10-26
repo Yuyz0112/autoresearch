@@ -35,6 +35,13 @@ export function workspaceFrom(variable: string): string {
 }
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
+
+/**
+ * A turn that ran out of time. Sometimes the platform takes the message and
+ * never starts the turn, and no interrupt moves it; a caller whose turns are
+ * short can ask again in a new session.
+ */
+export class NapTimeout extends HarnessError {}
 const IMAGE_TYPES: Record<string, string> = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
@@ -167,7 +174,7 @@ async function awaitAnswer(
     await sleep(options.pollMs ?? 5000);
     if (Date.now() > deadline) {
       await client.json("POST", `/sessions/${session}/interrupt`, {}).catch(() => undefined);
-      throw new HarnessError(`NAP did not answer within ${timeoutMs}ms (session ${session})`);
+      throw new NapTimeout(`NAP did not answer within ${timeoutMs}ms (session ${session})`);
     }
     let state: Session;
     try {
