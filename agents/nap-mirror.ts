@@ -80,10 +80,10 @@ export function mirrorTo(client: NapClient, options: MirrorOptions): Mirror {
         throw new HarnessError(`${cwd} is outside the mirrored ${root}`);
       }
       const { packed, archive } = await pack(root, options.paths, attachmentsOf(root, request));
-      await client.put(`${BASE}/unpack.sh`, Buffer.from(unpackScript(root, options.setup)));
+      await client.put(`${BASE}/unpack.sh`, Buffer.from(unpackScript(root, id, options.setup)));
       await client.put(`${BASE}/${id}/tree.tar.gz`, archive);
       return {
-        preamble: preambleOf(root, cwd, id),
+        preamble: preambleOf(root, cwd),
         async receive() {
           try {
             await client.get(`${BASE}/${id}/ready`);
@@ -126,11 +126,11 @@ export function mirrorTo(client: NapClient, options: MirrorOptions): Mirror {
   };
 }
 
-function preambleOf(root: string, cwd: string, id: string): string {
+function preambleOf(root: string, cwd: string): string {
   return [
     `This turn works on a copy of ${root} made for it. Before anything else, run:`,
     "",
-    `  bash /workspace/${BASE}/unpack.sh ${id}`,
+    `  bash /workspace/${BASE}/unpack.sh`,
     "",
     "The first time it can take fifteen minutes. Do not go on until it has",
     "printed `mirror ready`; if your tool stops waiting before that, run it",
@@ -144,15 +144,16 @@ function preambleOf(root: string, cwd: string, id: string): string {
  * Replaces the workspace's tree with the archive, makes it appear at the
  * local path and runs the setup; only then is the turn marked ready.
  * Installed packages are kept, since installing them again every turn would
- * cost more than the turn.
+ * cost more than the turn. The turn is written in rather than passed: an
+ * agent retyping its id has dropped a character of it.
  */
-export function unpackScript(root: string, setup?: string): string {
-  const quoted = `'${root.replace(/'/g, `'\\''`)}'`;
+export function unpackScript(root: string, turn: string, setup?: string): string {
+  const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
   return `#!/usr/bin/env bash
 # Written by the harness before each mirrored turn.
 set -euo pipefail
-turn="$1"
-root=${quoted}
+turn=${quote(turn)}
+root=${quote(root)}
 base=/workspace/${BASE}
 tree=/workspace/${TREE}
 archive="$base/$turn/tree.tar.gz"
