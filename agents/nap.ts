@@ -92,7 +92,14 @@ async function turn(
   if (session === undefined) {
     throw new HarnessError(`NAP started no session in ${options.workspace}`);
   }
-  const text = await awaitAnswer(client, session, options);
+  let text: string;
+  try {
+    text = await awaitAnswer(client, session, options);
+  } catch (error) {
+    // Nobody will collect what the turn does now; it should not go on working.
+    await client.json("POST", `/sessions/${session}/interrupt`, {}).catch(() => undefined);
+    throw error;
+  }
   const usage = await usageOf(client, session, options.pollMs);
   if (sent !== undefined) {
     await sent.receive();
@@ -293,7 +300,10 @@ export function napClient(options: NapOptions): NapClient {
               `NAP ${method} ${path} returned ${response.status}: ${(await response.text()).slice(0, 300)}`,
             );
       const wait = RETRY_WAITS_MS[attempt - 1];
-      if (wait === undefined || !isTransient(error)) {
+      // A read can always be asked again; the platform has failed one
+      // mid-restart with a plain 500.
+      const again = isTransient(error) || (method === "GET" && response?.status === 500);
+      if (wait === undefined || !again) {
         throw error;
       }
       await sleep(wait);
