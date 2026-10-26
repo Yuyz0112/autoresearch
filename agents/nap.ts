@@ -37,11 +37,18 @@ export function workspaceFrom(variable: string): string {
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 
 /**
- * A turn that ran out of time. Sometimes the platform takes the message and
- * never starts the turn, and no interrupt moves it; a caller whose turns are
- * short can ask again in a new session.
+ * A turn that produced no answer: cut off partway, or never finished. The
+ * platform now and then does either to a turn it was given without anything
+ * being wrong with what was asked, so a caller whose turns are short can ask
+ * again in a new session.
  */
-export class NapTimeout extends HarnessError {}
+export class NapLostTurn extends HarnessError {}
+
+/**
+ * Out of time. Sometimes the platform takes the message and never starts
+ * the turn, and no interrupt moves it.
+ */
+export class NapTimeout extends NapLostTurn {}
 const IMAGE_TYPES: Record<string, string> = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
@@ -208,7 +215,7 @@ export function answerOf(messages: Message[], session = "?"): string {
   const block = last?.blocks?.at(-1);
   const text = block?.type === "text" ? block.text : undefined;
   if (last?.role !== "assistant" || text === undefined || text.trim() === "") {
-    throw new HarnessError(`NAP returned no answer (session ${session})`);
+    throw new NapLostTurn(`NAP returned no answer (session ${session})`);
   }
   return text;
 }
