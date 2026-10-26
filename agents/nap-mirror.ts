@@ -55,6 +55,12 @@ export type Packed = Map<string, { size: number; mtime: number }>;
 
 const BASE = ".nap-mirror";
 const TREE = `${BASE}/tree`;
+/**
+ * Deletions past this many (or a tenth of the copy, if more) are taken for a
+ * copy that broke in the workspace — it once came back half wiped, and the
+ * harness deleted here what was missing there — rather than an agent's work.
+ */
+const MAX_REMOVED = 20;
 /** Never carried either way: too large to copy, or not the turn's to change. */
 const SKIPPED = new Set(["node_modules", ".git"]);
 
@@ -95,6 +101,14 @@ export function mirrorTo(client: NapClient, options: MirrorOptions): Mirror {
             packed,
             changes,
           );
+          const removed = kept.filter((path) => changes.removed.includes(path));
+          if (removed.length > Math.max(MAX_REMOVED, packed.size / 10)) {
+            throw new HarnessError(
+              `The copy came back without ${removed.length} of the ${packed.size} files it was ` +
+                `given (${removed.slice(0, 3).join(", ")}, …): taken for a broken copy, not ` +
+                "the agent's deletions, so nothing came back",
+            );
+          }
           for (const path of kept) {
             const local = join(root, path);
             if (changes.removed.includes(path)) {
@@ -139,10 +153,32 @@ export function unpackScript(root: string, setup?: string): string {
 set -euo pipefail
 turn="$1"
 root=${quoted}
+base=/workspace/${BASE}
 tree=/workspace/${TREE}
+archive="$base/$turn/tree.tar.gz"
+ready() {
+  if [ -e "$base/$turn/ready" ]; then
+    echo "mirror ready at $root"
+    exit 0
+  fi
+}
+# Run again once this turn's copy is made, it only says so. Run while an
+# earlier run is still going — a tool that stopped waiting does not stop
+# the command — it waits its turn rather than wiping the tree under it.
+ready
+exec 9>"$base/lock"
+flock 9
+ready
 mkdir -p "$tree"
 find "$tree" -mindepth 1 -maxdepth 1 ! -name node_modules -exec rm -rf {} +
-tar -xzf "/workspace/${BASE}/$turn/tree.tar.gz" -C "$tree"
+tar -xzf "$archive" -C "$tree"
+# Whatever is missing here would be taken for the agent's deletion.
+tar -tzf "$archive" | while IFS= read -r entry; do
+  if [ ! -e "$tree/$entry" ] && [ ! -L "$tree/$entry" ]; then
+    echo "missing after unpacking: $entry" >&2
+    exit 1
+  fi
+done
 if [ "$(readlink "$root" || true)" != "$tree" ]; then
   if [ -e "$root" ] && [ ! -L "$root" ]; then
     echo "$root exists and is not the mirror" >&2
@@ -152,7 +188,7 @@ if [ "$(readlink "$root" || true)" != "$tree" ]; then
   sudo ln -sfn "$tree" "$root"
 fi
 ${setup ?? ""}
-touch "/workspace/${BASE}/$turn/ready"
+touch "$base/$turn/ready"
 echo "mirror ready at $root"
 `;
 }
