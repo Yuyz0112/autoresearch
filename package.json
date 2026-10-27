@@ -1,0 +1,33 @@
+{
+  "name": "autoresearch",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Let an agent improve a subject round after round, keeping what scores better and reverting the rest.",
+  "type": "module",
+  "exports": {
+    "./*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "test": "vp test",
+    "check": "vp check",
+    "fix": "vp check --fix",
+    "prepare": "vp config"
+  },
+  "dependencies": {
+    "simple-git": "^3.36.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "typescript": "^7.0.2",
+    "vite": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "11.25.0",
+      "onFail": "download"
+    }
+  }
+}
