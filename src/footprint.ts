@@ -50,6 +50,28 @@ export function touched(
     .sort();
 }
 
+/**
+ * A turn run in a checkout the scope guard does not watch, failed if it
+ * changed anything there that `allowed` does not cover. Nothing it changed is
+ * removed: someone may be working in that checkout alongside the run, and
+ * their work is indistinguishable from the agent's. The round fails so it is
+ * not kept, and the paths say what to look at.
+ */
+export async function confine<T>(
+  dir: string,
+  scope: string,
+  allowed: (path: string) => boolean,
+  turn: () => Promise<T>,
+): Promise<T> {
+  const before = await footprint(dir);
+  const result = await turn();
+  const strayed = touched(before, await footprint(dir), allowed);
+  if (strayed.length > 0) {
+    throw new Error(`The agent changed files outside ${scope}:\n  ${strayed.join("\n  ")}`);
+  }
+  return result;
+}
+
 async function digest(path: string): Promise<string> {
   try {
     return createHash("sha256")

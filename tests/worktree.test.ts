@@ -1,10 +1,11 @@
-import { rm, writeFile } from "node:fs/promises";
-import { mkdtemp } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readlink, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { simpleGit } from "simple-git";
 import { expect, test } from "vite-plus/test";
-import { ensureWorktree } from "../src/worktree.ts";
+import { findLeftovers, removeLeftovers } from "../src/reset.ts";
+import { branchOf, ensureWorktree, linkDependencies } from "../src/worktree.ts";
 
 async function initRepo(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "ar-wt-"));
@@ -57,4 +58,36 @@ test("recovers a worktree whose directory was deleted by hand", async () => {
 
   expect(await ensureWorktree(repo, "gauge")).toBe(path);
   expect(await simpleGit(path).revparse(["--abbrev-ref", "HEAD"])).toBe("autoresearch/gauge");
+});
+
+test("a worktree resolves packages through the main checkout's", async () => {
+  const repo = await initRepo();
+  await writeFile(join(repo, ".gitignore"), "node_modules\n");
+  await simpleGit(repo).add(".gitignore").commit("ignore packages");
+  const path = await ensureWorktree(repo, "gauge");
+  await linkDependencies(path, repo);
+  // Again, over the link it made.
+  await linkDependencies(path, repo);
+  expect(await readlink(join(path, "node_modules"))).toBe(join(repo, "node_modules"));
+  expect((await simpleGit(path).status()).isClean()).toBe(true);
+});
+
+test("a research's leftovers are found together and removed together", async () => {
+  const repo = await initRepo();
+  const ledgers = join(repo, "researches");
+  await mkdir(ledgers);
+  await writeFile(join(ledgers, "a1.json"), JSON.stringify({ name: "other" }));
+  await writeFile(join(ledgers, "b2.json"), JSON.stringify({ name: "gauge" }));
+  expect(await findLeftovers(repo, "gauge", ledgers)).toEqual({ ledger: join(ledgers, "b2.json") });
+
+  const path = await ensureWorktree(repo, "gauge");
+  const leftovers = await findLeftovers(repo, "gauge", ledgers);
+  expect(leftovers).toEqual({
+    worktree: path,
+    branch: branchOf("gauge"),
+    ledger: join(ledgers, "b2.json"),
+  });
+  await removeLeftovers(repo, leftovers);
+  expect(await findLeftovers(repo, "gauge", ledgers)).toEqual({});
+  expect(existsSync(join(ledgers, "a1.json"))).toBe(true);
 });

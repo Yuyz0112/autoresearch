@@ -1,9 +1,10 @@
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { simpleGit } from "simple-git";
 import { expect, test } from "vite-plus/test";
-import { footprint, touched } from "../src/footprint.ts";
+import { confine, footprint, touched } from "../src/footprint.ts";
 
 test("a footprint tells what changed outside the ignored paths", async () => {
   const dir = await mkdtemp(join(tmpdir(), "footprint-"));
@@ -34,6 +35,29 @@ test("a footprint tells what changed outside the ignored paths", async () => {
       "new.ts",
     ]);
     expect(touched(after, after)).toEqual([]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a confined turn that strays fails, and what it changed is left alone", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "confine-"));
+  try {
+    await simpleGit(dir).init();
+    await writeFile(join(dir, "ledger.json"), "{}\n");
+    const allowed = (path: string) => path === "ledger.json";
+    expect(
+      await confine(dir, "its cases", allowed, async () => {
+        await writeFile(join(dir, "ledger.json"), "{ }\n");
+        return "kept to itself";
+      }),
+    ).toBe("kept to itself");
+    await expect(
+      confine(dir, "its cases", allowed, async () => {
+        await writeFile(join(dir, "stray.ts"), "mine\n");
+      }),
+    ).rejects.toThrow("The agent changed files outside its cases:\n  stray.ts");
+    expect(existsSync(join(dir, "stray.ts"))).toBe(true);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
