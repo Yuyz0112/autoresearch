@@ -22,6 +22,12 @@ export type MirrorOptions = {
    */
   root: string;
   /**
+   * Other checkouts the turn's tools load, like a package linked from beside
+   * root: their git-visible files are carried in, to their own paths, and
+   * nothing is brought back from them.
+   */
+  alongside?: string[];
+  /**
    * What git does not see but the turn needs, relative to root: notes,
    * briefings, a round's state. What git sees is always carried, worktrees
    * and the repository itself included; installed packages never are.
@@ -54,7 +60,13 @@ type Sent = {
 export type Packed = Map<string, { size: number; mtime: number }>;
 
 const BASE = ".nap-mirror";
-const TREE = `${BASE}/tree`;
+/**
+ * Where a checkout's copy lives in the workspace: under its own absolute
+ * path, so the relative links between checkouts — a package linked from
+ * beside root, say — resolve there as they do here. The copy is reached
+ * through a link at that path; it lives in /workspace, which is kept.
+ */
+const treeOf = (checkout: string) => `${BASE}/trees${checkout}`;
 /**
  * Deletions past this many (or a tenth of the copy, if more) are taken for a
  * copy that broke in the workspace — it once came back half wiped, and the
@@ -73,6 +85,12 @@ const SKIPPED = new Set(["node_modules", ".git"]);
  */
 export function mirrorTo(client: NapClient, options: MirrorOptions): Mirror {
   const root = resolve(options.root);
+  const alongside = (options.alongside ?? []).map((one) => resolve(one));
+  for (const one of alongside) {
+    if (!isOutside(root, one) || !isOutside(one, root)) {
+      throw new HarnessError(`${one} and the mirrored ${root} overlap`);
+    }
+  }
   return {
     async send(id, request) {
       const cwd = resolve(request.cwd);
@@ -80,8 +98,15 @@ export function mirrorTo(client: NapClient, options: MirrorOptions): Mirror {
         throw new HarnessError(`${cwd} is outside the mirrored ${root}`);
       }
       const { packed, archive } = await pack(root, options.paths, attachmentsOf(root, request));
-      await client.put(`${BASE}/unpack.sh`, Buffer.from(unpackScript(root, id, options.setup)));
-      await client.put(`${BASE}/${id}/tree.tar.gz`, archive);
+      const checkouts = [root, ...alongside];
+      await client.put(
+        `${BASE}/unpack.sh`,
+        Buffer.from(unpackScript(checkouts, id, options.setup)),
+      );
+      await client.put(`${BASE}/${id}/0.tar.gz`, archive);
+      for (const [index, checkout] of alongside.entries()) {
+        await client.put(`${BASE}/${id}/${index + 1}.tar.gz`, await carried(checkout));
+      }
       return {
         preamble: preambleOf(root, cwd),
         async receive() {
@@ -94,7 +119,7 @@ export function mirrorTo(client: NapClient, options: MirrorOptions): Mirror {
               { cause: error },
             );
           }
-          const changes = diff(packed, await walk(client, TREE));
+          const changes = diff(packed, await walk(client, treeOf(root)));
           const kept = await keep(
             root,
             [...options.paths, ...(options.returns ?? [])],
@@ -116,7 +141,7 @@ export function mirrorTo(client: NapClient, options: MirrorOptions): Mirror {
               continue;
             }
             await mkdir(dirname(local), { recursive: true });
-            await writeFile(local, await client.get(`${TREE}/${path}`));
+            await writeFile(local, await client.get(`${treeOf(root)}/${path}`));
           }
           await client.remove(`${BASE}/${id}`).catch(() => undefined);
           return kept;
@@ -141,22 +166,22 @@ function preambleOf(root: string, cwd: string): string {
 }
 
 /**
- * Replaces the workspace's tree with the archive, makes it appear at the
- * local path and runs the setup; only then is the turn marked ready.
- * Installed packages are kept, since installing them again every turn would
- * cost more than the turn. The turn is written in rather than passed: an
- * agent retyping its id has dropped a character of it.
+ * Replaces each checkout's copy in the workspace with its archive, makes it
+ * appear at the local path and runs the setup; only then is the turn marked
+ * ready. The first checkout is root; the archives are numbered in the same
+ * order. Installed packages are kept, since installing them again every turn
+ * would cost more than the turn. The turn is written in rather than passed:
+ * an agent retyping its id has dropped a character of it.
  */
-export function unpackScript(root: string, turn: string, setup?: string): string {
+export function unpackScript(checkouts: string[], turn: string, setup?: string): string {
   const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+  const unpacks = checkouts.map((one, index) => `unpack ${index}.tar.gz ${quote(one)}`);
   return `#!/usr/bin/env bash
 # Written by the harness before each mirrored turn.
 set -euo pipefail
 turn=${quote(turn)}
-root=${quote(root)}
+root=${quote(checkouts[0]!)}
 base=/workspace/${BASE}
-tree=/workspace/${TREE}
-archive="$base/$turn/tree.tar.gz"
 ready() {
   if [ -e "$base/$turn/ready" ]; then
     echo "mirror ready at $root"
@@ -170,24 +195,29 @@ ready
 exec 9>"$base/lock"
 flock 9
 ready
-mkdir -p "$tree"
-find "$tree" -mindepth 1 -maxdepth 1 ! -name node_modules -exec rm -rf {} +
-tar -xzf "$archive" -C "$tree"
-# Whatever is missing here would be taken for the agent's deletion.
-tar -tzf "$archive" | while IFS= read -r entry; do
-  if [ ! -e "$tree/$entry" ] && [ ! -L "$tree/$entry" ]; then
-    echo "missing after unpacking: $entry" >&2
-    exit 1
+unpack() {
+  local archive="$base/$turn/$1" path="$2"
+  local tree="$base/trees$path"
+  mkdir -p "$tree"
+  find "$tree" -mindepth 1 -maxdepth 1 ! -name node_modules -exec rm -rf {} +
+  tar -xzf "$archive" -C "$tree"
+  # Whatever is missing here would be taken for the agent's deletion.
+  tar -tzf "$archive" | while IFS= read -r entry; do
+    if [ ! -e "$tree/$entry" ] && [ ! -L "$tree/$entry" ]; then
+      echo "missing after unpacking: $entry" >&2
+      exit 1
+    fi
+  done
+  if [ "$(readlink "$path" || true)" != "$tree" ]; then
+    if [ -e "$path" ] && [ ! -L "$path" ]; then
+      echo "$path exists and is not the mirror" >&2
+      exit 1
+    fi
+    sudo mkdir -p "$(dirname "$path")"
+    sudo ln -sfn "$tree" "$path"
   fi
-done
-if [ "$(readlink "$root" || true)" != "$tree" ]; then
-  if [ -e "$root" ] && [ ! -L "$root" ]; then
-    echo "$root exists and is not the mirror" >&2
-    exit 1
-  fi
-  sudo mkdir -p "$(dirname "$root")"
-  sudo ln -sfn "$tree" "$root"
-fi
+}
+${unpacks.join("\n")}
 ${setup ?? ""}
 touch "$base/$turn/ready"
 echo "mirror ready at $root"
@@ -237,16 +267,32 @@ async function pack(
     }
   }
 
+  return { packed, archive: await archiveOf(root, listed) };
+}
+
+/** A checkout carried alongside: what git sees, and no more. */
+async function carried(checkout: string): Promise<Buffer> {
+  const listed: string[] = [];
+  for (const path of (await gitFiles(checkout)).sort()) {
+    const stat = await lstat(join(checkout, path)).catch(() => undefined);
+    if (stat?.isFile() === true || stat?.isSymbolicLink() === true) {
+      listed.push(path);
+    }
+  }
+  return archiveOf(checkout, listed);
+}
+
+async function archiveOf(dir: string, listed: string[]): Promise<Buffer> {
   const scratch = await mkdtemp(join(tmpdir(), "nap-mirror-"));
   try {
     const list = join(scratch, "files");
     const archive = join(scratch, "tree.tar.gz");
     await writeFile(list, listed.join("\n") + "\n");
     // ustar has no room for macOS metadata, which GNU tar would warn about.
-    await run("tar", ["--format", "ustar", "-czf", archive, "-C", root, "-T", list], root, {
+    await run("tar", ["--format", "ustar", "-czf", archive, "-C", dir, "-T", list], dir, {
       COPYFILE_DISABLE: "1",
     });
-    return { packed, archive: await readFile(archive) };
+    return await readFile(archive);
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }

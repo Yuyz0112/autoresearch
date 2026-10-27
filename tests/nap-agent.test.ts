@@ -84,7 +84,7 @@ test("a changed, added or removed file is told apart by size and time", () => {
 });
 
 test("the unpack script runs one at a time, and a run after the copy is made only says so", () => {
-  const script = unpackScript("/repo", "t1");
+  const script = unpackScript(["/repo"], "t1");
   const locked = script.indexOf("flock 9");
   expect(locked).toBeGreaterThan(-1);
   expect(script.lastIndexOf("\nready\n", locked)).toBeGreaterThan(-1);
@@ -94,16 +94,16 @@ test("the unpack script runs one at a time, and a run after the copy is made onl
 });
 
 test("the unpack script quotes the path it links, and is ready only after the setup", () => {
-  const script = unpackScript("/home/o'neil/repo", "t1", "bash setup.sh");
+  const script = unpackScript(["/home/o'neil/repo"], "t1", "bash setup.sh");
   expect(script).toContain(`root='/home/o'\\''neil/repo'`);
   expect(script.indexOf("bash setup.sh")).toBeGreaterThan(script.indexOf("tar -xzf"));
   expect(script.indexOf("bash setup.sh")).toBeLessThan(script.indexOf('touch "$base/$turn/ready"'));
 });
 
 test("the unpack script names its turn, so the agent has no id to retype", () => {
-  const script = unpackScript("/repo", "mvpnvsx3-u4rup9");
+  const script = unpackScript(["/repo"], "mvpnvsx3-u4rup9");
   expect(script).toContain("turn='mvpnvsx3-u4rup9'");
-  expect(script).not.toContain("$1");
+  expect(script).not.toMatch(/^turn="?\$/m);
 });
 
 /** The turn the harness wrote into the workspace's unpack script. */
@@ -297,11 +297,11 @@ test("a mirrored turn carries the checkout in and what it changed back", async (
     message = sent;
     // What the unpack script does, minus the link: the tree is in place.
     const turn = await turnOf(workspace);
-    const tree = join(workspace, ".nap-mirror", "tree");
+    const tree = join(workspace, ".nap-mirror", "trees", root);
     await mkdir(tree, { recursive: true });
     const unpacked = spawnSync("tar", [
       "-xzf",
-      join(workspace, ".nap-mirror", turn, "tree.tar.gz"),
+      join(workspace, ".nap-mirror", turn, "0.tar.gz"),
       "-C",
       tree,
     ]);
@@ -352,7 +352,62 @@ test("a mirrored turn carries the checkout in and what it changed back", async (
   expect(existsSync(join(worktree, ".git"))).toBe(true);
   expect(await readFile(join(root, "kept.ts"), "utf8")).toBe("one\n");
   // The turn's inbox is cleared.
-  expect(await readdir(join(workspace, ".nap-mirror"))).toEqual(["tree", "unpack.sh"]);
+  expect(await readdir(join(workspace, ".nap-mirror"))).toEqual(["trees", "unpack.sh"]);
+});
+
+test("a checkout carried alongside goes in as git sees it, and nothing of it comes back", async () => {
+  const root = await temp("nap-mirror-main-");
+  const beside = await temp("nap-mirror-beside-");
+  const workspace = await temp("nap-mirror-beside-ws-");
+  await simpleGit(root).init();
+  await writeFile(join(root, "app.ts"), "one\n");
+  await simpleGit(beside).init();
+  await writeFile(join(beside, ".gitignore"), "node_modules\n");
+  await writeFile(join(beside, "lib.ts"), "one\n");
+  await mkdir(join(beside, "node_modules", "dep"), { recursive: true });
+  await writeFile(join(beside, "node_modules", "dep", "index.js"), "installed\n");
+
+  let script = "";
+  const fake = fakeNap(workspace, async () => {
+    const turn = await turnOf(workspace);
+    script = await readFile(join(workspace, ".nap-mirror", "unpack.sh"), "utf8");
+    const listed = spawnSync("tar", ["-tzf", join(workspace, ".nap-mirror", turn, "1.tar.gz")]);
+    expect(listed.stdout.toString().split("\n").sort()).toEqual(["", ".gitignore", "lib.ts"]);
+    const tree = join(workspace, ".nap-mirror", "trees", root);
+    await mkdir(tree, { recursive: true });
+    spawnSync("tar", ["-xzf", join(workspace, ".nap-mirror", turn, "0.tar.gz"), "-C", tree]);
+    await writeFile(join(workspace, ".nap-mirror", turn, "ready"), "");
+    // Changed in its copy, which is not brought back.
+    const copy = join(workspace, ".nap-mirror", "trees", beside);
+    await mkdir(copy, { recursive: true });
+    await writeFile(join(copy, "lib.ts"), "changed there\n");
+    return "Done.";
+  });
+  const agent = await nap({
+    workspace: "ws",
+    baseUrl: "http://nap",
+    token: "t",
+    pollMs: 1,
+    fetch: fake.fetch,
+    mirror: { root, alongside: [beside], paths: [] },
+  });
+  expect((await agent.ask({ instructions: "", prompt: "Go.", cwd: root })).text).toBe("Done.");
+  expect(script).toContain(`unpack 0.tar.gz '${root}'\nunpack 1.tar.gz '${beside}'\n`);
+  expect(await readFile(join(beside, "lib.ts"), "utf8")).toBe("one\n");
+});
+
+test("a checkout carried alongside may not overlap the mirrored one", async () => {
+  const root = await temp("nap-mirror-overlap-");
+  const fake = fakeNap(await temp("nap-mirror-overlap-ws-"), async () => "Done.");
+  await expect(
+    nap({
+      workspace: "ws",
+      baseUrl: "http://nap",
+      token: "t",
+      fetch: fake.fetch,
+      mirror: { root, alongside: [join(root, "lib")], paths: [] },
+    }),
+  ).rejects.toThrow(/overlap/);
 });
 
 test("a mirrored turn whose agent never unpacked brings nothing back", async () => {
@@ -384,9 +439,9 @@ test("a copy that comes back half wiped is taken for broken, and nothing comes b
   }
   const fake = fakeNap(workspace, async () => {
     const turn = await turnOf(workspace);
-    const tree = join(workspace, ".nap-mirror", "tree");
+    const tree = join(workspace, ".nap-mirror", "trees", root);
     await mkdir(tree, { recursive: true });
-    spawnSync("tar", ["-xzf", join(workspace, ".nap-mirror", turn, "tree.tar.gz"), "-C", tree]);
+    spawnSync("tar", ["-xzf", join(workspace, ".nap-mirror", turn, "0.tar.gz"), "-C", tree]);
     await writeFile(join(workspace, ".nap-mirror", turn, "ready"), "");
     // A second unpack wiping the tree under the first.
     for (let n = 0; n < 25; n++) {
